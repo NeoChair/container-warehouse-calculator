@@ -1,5 +1,7 @@
 import { getDb } from "@/lib/db";
+import { getSharedGathDe } from "@/lib/gathDe";
 import { NextResponse } from "next/server";
+import sql from "mssql";
 
 export interface ContainerRow {
     OWNR_ETP_CD: string;
@@ -20,7 +22,7 @@ const INTRANSIT_QUERY = `
     SELECT
         [OWNR_ETP_CD], [PO_NO], [ITM_ID], [GATH_DE], [CONT_NO], [SUPL_FACT], [WRHS_NM], [QTY], [ETA], [ETD]
     FROM [HGBC].[RPA].[TB_INTRANSIT_STOCK_DAIL]
-    WHERE GATH_DE = (SELECT MAX(GATH_DE) FROM [HGBC].[RPA].[TB_INTRANSIT_STOCK_DAIL])
+    WHERE GATH_DE = @gathDe
 `;
 
 // 아직 실제 컨테이너에 안 실린 생산계획(선적계획) 단계 PO. CONT_NO 컬럼 자체가 없어서 병합 시 빈 문자열로 채운다.
@@ -41,7 +43,7 @@ const PLAN_QUERY = `
     SELECT
         [OWNR_ETP_CD], [PO_NO], [ITM_ID], [GATH_DE], [SUPL_FACT], [WRHS_CD] AS WRHS_NM, [QTY], [ETD], [ETA]
     FROM [HGBC].[RPA].[TB_SHIPPING_PLAN_STOCK]
-    WHERE GATH_DE = (SELECT MAX(GATH_DE) FROM [HGBC].[RPA].[TB_SHIPPING_PLAN_STOCK])
+    WHERE GATH_DE = @gathDe
 `;
 
 // TB_SHIPPING_PLAN_STOCK의 ETA/ETD는 "2026-09-27"처럼 구분자가 있는 형식이라, TB_INTRANSIT_STOCK_DAIL의
@@ -54,9 +56,10 @@ function toCompactDate(s: string | null): string | null {
 export async function GET() {
     try {
         const db = await getDb();
+        const gathDe = await getSharedGathDe();
         const [intransitResult, planResult] = await Promise.all([
-            db.request().query<ContainerRow>(INTRANSIT_QUERY),
-            db.request().query<PlanRow>(PLAN_QUERY),
+            db.request().input("gathDe", sql.VarChar, gathDe).query<ContainerRow>(INTRANSIT_QUERY),
+            db.request().input("gathDe", sql.VarChar, gathDe).query<PlanRow>(PLAN_QUERY),
         ]);
 
         const planRows: ContainerRow[] = planResult.recordset.map((r) => ({
