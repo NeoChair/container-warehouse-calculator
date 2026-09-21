@@ -396,8 +396,10 @@ export default function Home() {
         const groups = new Map<string, GroupedContainer>();
         for (const row of containers) {
             const eta = parseCompactDate(row.ETA);
-            // ETA가 이미 지난 건은 항구 도착 시점에 이미 라우팅이 정해졌을 거라 볼 필요 없음.
-            if (!eta || eta < today || !enabledCodes.includes(row.WRHS_NM)) continue;
+            // ETA가 이미 지난 건은 항구 도착 시점에 이미 라우팅이 정해졌을 거라 볼 필요 없음. (현재는 과거 ETA도 표시하도록 비활성화)
+            // if (!eta || eta < today || !enabledCodes.includes(row.WRHS_NM)) continue;
+            // ETA가 없는 건은 표시하지 않는다.
+            if (!eta || !enabledCodes.includes(row.WRHS_NM)) continue;
             // CONT_NO가 빈 값이면 아직 실제 컨테이너에 안 실린 생산계획 단계 품목. 이 경우 서로 무관한
             // 품목들이 빈 CONT_NO 하나로 뭉치지 않도록 PO_NO 기준으로 그룹핑한다.
             const groupKey = row.CONT_NO || `NOCONT::${row.PO_NO}`;
@@ -597,10 +599,21 @@ export default function Home() {
 
                         return (
                             <div key={calc.container.groupKey} className="rounded-md bg-white shadow-sm">
-                                <button
-                                    type="button"
-                                    onClick={() => toggleExpanded(calc.container.groupKey)}
-                                    className="flex w-full flex-wrap items-center gap-3 px-5 py-4 text-left"
+                                {/* button 안의 텍스트는 드래그 선택이 안 돼서 div로 두고, 텍스트를 드래그 선택한 직후의 클릭은 토글하지 않는다. */}
+                                <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => {
+                                        if (window.getSelection()?.toString()) return;
+                                        toggleExpanded(calc.container.groupKey);
+                                    }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter" || e.key === " ") {
+                                            e.preventDefault();
+                                            toggleExpanded(calc.container.groupKey);
+                                        }
+                                    }}
+                                    className="flex w-full cursor-pointer flex-wrap items-center gap-3 px-5 py-4 text-left"
                                 >
                                     <ChevronIcon open={isOpen} />
                                     <span
@@ -612,11 +625,11 @@ export default function Home() {
                                     >
                                         {calc.container.contNo ? "이동중" : "선적계획"}
                                     </span>
-                                    <span className="font-mono text-sm font-medium text-gray-800">
+                                    <span className="cursor-text select-text font-mono text-sm font-medium text-gray-800">
                                         {calc.container.contNo || "—"}
                                     </span>
                                     {poNos.length > 0 && (
-                                        <span className="font-mono text-xs text-gray-400" title={poNos.join(", ")}>
+                                        <span className="cursor-text select-text font-mono text-xs text-gray-400" title={poNos.join(", ")}>
                                             {poNos.join(", ")}
                                         </span>
                                     )}
@@ -632,7 +645,7 @@ export default function Home() {
                                         {whLabel(calc.finalCode)} {isManual ? "· 수동" : "· 자동"}
                                     </span>
                                     <span className="ml-auto text-xs text-gray-400">SKU {calc.items.length}건</span>
-                                </button>
+                                </div>
 
                                 {isOpen && (
                                     <div className="flex flex-col gap-3 border-t border-gray-100 px-5 py-4">
