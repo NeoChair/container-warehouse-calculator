@@ -8,7 +8,7 @@ export interface ContainerRow {
     PO_NO: string;
     ITM_ID: string;
     GATH_DE: string;
-    /** 아직 실제 컨테이너에 안 실린 생산계획 단계 PO는 빈 문자열. */
+    /** 선적계획 단계 PO 중 아직 컨테이너 번호가 배정 안 된 건은 빈 문자열. */
     CONT_NO: string;
     SUPL_FACT: string;
     WRHS_NM: string;
@@ -25,13 +25,14 @@ const INTRANSIT_QUERY = `
     WHERE GATH_DE = @gathDe
 `;
 
-// 아직 실제 컨테이너에 안 실린 생산계획(선적계획) 단계 PO. CONT_NO 컬럼 자체가 없어서 병합 시 빈 문자열로 채운다.
+// 선적계획 단계 PO. 이미 컨테이너 번호가 배정된 건도 있고, 아직 미배정이면 CONT_NO가 공백/빈 문자열이다.
 // 창고 컬럼명이 WRHS_CD라 TB_INTRANSIT_STOCK_DAIL과 같은 이름(WRHS_NM)으로 별칭을 준다.
 type PlanRow = {
     OWNR_ETP_CD: string;
     PO_NO: string;
     ITM_ID: string;
     GATH_DE: string;
+    CONT_NO: string | null;
     SUPL_FACT: string;
     WRHS_NM: string;
     QTY: number;
@@ -41,7 +42,7 @@ type PlanRow = {
 
 const PLAN_QUERY = `
     SELECT
-        [OWNR_ETP_CD], [PO_NO], [ITM_ID], [GATH_DE], [SUPL_FACT], [WRHS_CD] AS WRHS_NM, [QTY], [ETD], [ETA]
+        [OWNR_ETP_CD], [PO_NO], [ITM_ID], [GATH_DE], [CONT_NO], [SUPL_FACT], [WRHS_CD] AS WRHS_NM, [QTY], [ETD], [ETA]
     FROM [HGBC].[RPA].[TB_SHIPPING_PLAN_STOCK]
     WHERE GATH_DE = @gathDe
 `;
@@ -67,7 +68,7 @@ export async function GET() {
             PO_NO: r.PO_NO,
             ITM_ID: r.ITM_ID,
             GATH_DE: r.GATH_DE,
-            CONT_NO: "",
+            CONT_NO: r.CONT_NO?.trim() ?? "",
             SUPL_FACT: r.SUPL_FACT,
             WRHS_NM: r.WRHS_NM,
             QTY: r.QTY,
