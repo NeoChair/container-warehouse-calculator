@@ -341,6 +341,9 @@ export default function Home() {
     const [openDate, setOpenDate] = useState("2026-11-01");
     const [transitLeadDays, setTransitLeadDays] = useState(7);
     const [refDate, setRefDate] = useState("ALL");
+    const [contQuery, setContQuery] = useState("");
+    const [poQuery, setPoQuery] = useState("");
+    const [skuQuery, setSkuQuery] = useState("");
     const [manualOverrides, setManualOverrides] = useState<Record<string, string>>({});
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -425,64 +428,41 @@ export default function Home() {
     const effectiveRefDate = refDate !== "ALL" && !etaDateOptions.includes(refDate) ? "ALL" : refDate;
 
     const containerCalcs: ContainerCalc[] = useMemo(() => {
-        const balances = new Map<string, number>();
-        const lastDecayDate = new Map<string, Date>();
-        const simStart = today;
-
-        const keyOf = (sku: string, whCode: string) => `${sku}::${whCode}`;
-        const initKey = (sku: string, whCode: string) => {
-            const key = keyOf(sku, whCode);
-            if (!balances.has(key)) {
-                const starting = whCode === NEW_WH_KEY ? 0 : inventoryBySku.get(sku)?.[whCode] ?? 0;
-                balances.set(key, starting);
-                lastDecayDate.set(key, simStart);
-            }
-            return key;
-        };
-        const decayTo = (sku: string, whCode: string, date: Date) => {
-            const key = initKey(sku, whCode);
-            const last = lastDecayDate.get(key)!;
-            const elapsed = Math.max(0, daysBetween(last, date));
-            const rate = getAvgDailyOutbound(sku, whCode, date);
-            balances.set(key, balances.get(key)! - rate * elapsed);
-            lastDecayDate.set(key, date);
-            return balances.get(key)!;
-        };
-
-        const results: ContainerCalc[] = [];
-
-        for (const container of groupedContainers) {
+        // 컨테이너끼리는 서로 영향을 주지 않는다. 앞선 컨테이너가 어느 창고로 갈지 확정이 아니므로
+        // 각 컨테이너는 오늘자 현재고에서 판정 시점까지의 출고만 빼서 독립적으로 판정한다.
+        return groupedContainers.map((container) => {
             const arrivalDate = addDays(container.eta, transitLeadDays);
+            // ETA가 지난 컨테이너도 판정은 오늘 기준으로 한다.
+            const judgeDate = container.eta < today ? today : container.eta;
             const itemCalcs: SkuCalc[] = container.items.map(({ sku, qty }) => {
                 const currentStock = inventoryBySku.get(sku)?.[container.originCode] ?? 0;
-                const balanceBeforeArrival = decayTo(sku, container.originCode, container.eta);
-                const rate = getAvgDailyOutbound(sku, container.originCode, container.eta);
+                const rate = getAvgDailyOutbound(sku, container.originCode, judgeDate);
+                const balanceBeforeArrival = currentStock - rate * daysBetween(today, judgeDate);
                 // 최근 7일 출고 이력이 없는 SKU(rate=0)는 이 재고로 소진되는 일이 없으니 재고소진일도 없고 보충도 불필요.
                 const dsiDays = rate > 0 ? balanceBeforeArrival / rate : Infinity;
-                const stockOutDate = rate > 0 ? addDays(container.eta, Math.max(0, Math.floor(dsiDays))) : null;
+                const stockOutDate = rate > 0 ? addDays(judgeDate, Math.max(0, Math.floor(dsiDays))) : null;
                 const needsBackfill = stockOutDate ? (openDateObj ? stockOutDate < openDateObj : true) : false;
                 return { sku, qty, currentStock, balanceBeforeArrival, avgDailyOutbound: rate, dsiDays, stockOutDate, needsBackfill };
             });
 
             const autoCode = itemCalcs.some((i) => i.needsBackfill) ? container.originCode : NEW_WH_KEY;
             const finalCode = manualOverrides[container.groupKey] ?? autoCode;
-
-            for (const { sku, qty } of container.items) {
-                initKey(sku, finalCode);
-                const key = keyOf(sku, finalCode);
-                balances.set(key, balances.get(key)! + qty);
-                lastDecayDate.set(key, arrivalDate);
-            }
-
-            results.push({ container, arrivalDate, autoCode, finalCode, items: itemCalcs });
-        }
-
-        return results;
+            return { container, arrivalDate, autoCode, finalCode, items: itemCalcs };
+        });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [groupedContainers, inventoryBySku, outboundBySku, dailySalesMode, openDate, transitLeadDays, manualOverrides, today]);
 
-    const visibleCalcs =
-        effectiveRefDate === "ALL" ? containerCalcs : containerCalcs.filter((c) => fmtDate(c.container.eta) === effectiveRefDate);
+    const normalizedContQuery = contQuery.trim().toUpperCase();
+    const normalizedPoQuery = poQuery.trim().toUpperCase();
+    const normalizedSkuQuery = skuQuery.trim().toUpperCase();
+    const visibleCalcs = containerCalcs.filter((c) => {
+        if (effectiveRefDate !== "ALL" && fmtDate(c.container.eta) !== effectiveRefDate) return false;
+        // 각 검색칸은 부분 일치, 둘 다 입력하면 모두 만족하는 것만 표시.
+        if (normalizedContQuery && !c.container.contNo.toUpperCase().includes(normalizedContQuery)) return false;
+        if (normalizedPoQuery && !c.container.items.some((i) => i.poNo?.toUpperCase().includes(normalizedPoQuery))) return false;
+        if (normalizedSkuQuery && !c.container.items.some((i) => i.sku.toUpperCase().includes(normalizedSkuQuery))) return false;
+        return true;
+    });
 
     const whLabel = (code: string) => (code === NEW_WH_KEY ? newWarehouseName : WAREHOUSE_MAP[code] ?? code);
 
@@ -583,11 +563,39 @@ export default function Home() {
                     {!openDateObj && (
                         <p className="text-sm text-amber-600">오픈일을 설정하지 않으면 모든 컨테이너가 보충 필요로 판정돼요.</p>
                     )}
-                </section>
 
-                <section className="flex items-center gap-3">
-                    <label className="text-sm font-medium text-gray-700">ETA</label>
-                    <CustomSelect options={refDateOptions} value={effectiveRefDate} onChange={setRefDate} />
+                    <hr className="border-gray-200" />
+
+                    <div className="flex items-center gap-3">
+                        <label className="text-sm font-medium text-gray-700">ETA</label>
+                        <div className="flex-1">
+                            <CustomSelect options={refDateOptions} value={effectiveRefDate} onChange={setRefDate} />
+                        </div>
+                        <label className="ml-3 shrink-0 text-sm font-medium text-gray-700">컨테이너</label>
+                        <input
+                            type="search"
+                            value={contQuery}
+                            onChange={(e) => setContQuery(e.target.value)}
+                            placeholder="컨테이너 번호 검색"
+                            className="h-10 min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-800 focus:outline-none focus:ring-1 focus:ring-[#ff4b4b]"
+                        />
+                        <label className="ml-3 shrink-0 text-sm font-medium text-gray-700">PO</label>
+                        <input
+                            type="search"
+                            value={poQuery}
+                            onChange={(e) => setPoQuery(e.target.value)}
+                            placeholder="PO 번호 검색"
+                            className="h-10 min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-800 focus:outline-none focus:ring-1 focus:ring-[#ff4b4b]"
+                        />
+                        <label className="ml-3 shrink-0 text-sm font-medium text-gray-700">SKU</label>
+                        <input
+                            type="search"
+                            value={skuQuery}
+                            onChange={(e) => setSkuQuery(e.target.value)}
+                            placeholder="SKU 검색"
+                            className="h-10 min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-800 focus:outline-none focus:ring-1 focus:ring-[#ff4b4b]"
+                        />
+                    </div>
                 </section>
 
                 <section className="flex flex-col gap-3">
